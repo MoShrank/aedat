@@ -106,6 +106,7 @@ convert_polarity(std::vector<AEDAT::PolarityEvent> &polarity_events,
   return event_tensors;
 }
 
+/*
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   py::class_<AEDAT::PolarityEvent>(m, "PolarityEvent");
 
@@ -155,3 +156,4 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_readwrite("polarity_events", &AEDAT4::polarity_events)
       .def_readwrite("frames", &AEDAT4::frames);
 }
+*/
