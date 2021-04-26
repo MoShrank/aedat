@@ -2,35 +2,23 @@
 #include <string>
 #include <iostream>
 
-static void globalShutdownSignalHandler(int signal) {
-    static atomic_bool globalShutdown(false);
-    // Simply set the running flag to false on SIGTERM and SIGINT (CTRL+C) for global shutdown.
-    if (signal == SIGTERM || signal == SIGINT) {
-        globalShutdown.store(true);
-    }
-}
-
-static void usbShutdownHandler(void *ptr) {
-	static atomic_bool globalShutdown(false);
-	(void) (ptr); // UNUSED.
-
-	globalShutdown.store(true);
-}
-
 
 int main(int argc, char *argv[]) {
 	std::string command = "Nonset";
-	uint32_t interval; 
+	uint32_t interval;
+	uint32_t buffer_size; 
 	
 	int id = 1;
 	int exitcode;
 
 	interval = strtol(argv[1], NULL, 0);
-	
-	DVSData dvsdata(interval); 
+	buffer_size = strtol(argv[2], NULL, 0);
 
-	auto davisHandler = dvsdata.connect2camera(id, globalShutdownSignalHandler);
-	davisHandler = dvsdata.startdatastream(davisHandler, usbShutdownHandler);
+	
+	DVSData dvsdata(interval, buffer_size); 
+
+	auto davisHandler = dvsdata.connect2camera(id);
+	davisHandler = dvsdata.startdatastream(davisHandler);
 
 	while (command!="q") {
 		auto tensor = dvsdata.update(davisHandler);

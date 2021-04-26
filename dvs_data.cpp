@@ -22,7 +22,14 @@
 
 namespace py = pybind11;
 
-static void globalShutdownSignalHandler(int signal) {
+
+// Constructor 
+DVSData::DVSData(uint32_t interval, uint32_t bfsize){
+    container_interval = interval; 
+    buffer_size = bfsize;
+}
+
+void DVSData::globalShutdownSignalHandler(int signal) {
     static atomic_bool globalShutdown(false);
     // Simply set the running flag to false on SIGTERM and SIGINT (CTRL+C) for global shutdown.
     if (signal == SIGTERM || signal == SIGINT) {
@@ -30,20 +37,15 @@ static void globalShutdownSignalHandler(int signal) {
     }
 }
 
-static void usbShutdownHandler(void *ptr) {
+void DVSData::usbShutdownHandler(void *ptr) {
     static atomic_bool globalShutdown(false);
 	(void) (ptr); // UNUSED.
 
 	globalShutdown.store(true);
 }
 
-// Constructor 
-DVSData::DVSData(uint32_t interval){
-    container_interval = interval; 
-}
-
 // Open a DAVIS, given ID, and don't care about USB bus or SN restrictions.
-libcaer::devices::davis DVSData::connect2camera(int ID, void (&globalShutdownSignalHandler)(int signal)){
+libcaer::devices::davis DVSData::connect2camera(int ID){
 
     #if defined(_WIN32)
         if (signal(SIGTERM, &globalShutdownSignalHandler) == SIG_ERR) {
@@ -59,8 +61,8 @@ libcaer::devices::davis DVSData::connect2camera(int ID, void (&globalShutdownSig
         }
     #else
         struct sigaction shutdownAction;
-
-        shutdownAction.sa_handler = &globalShutdownSignalHandler;
+        
+        shutdownAction.sa_handler = &DVSData::globalShutdownSignalHandler;
         shutdownAction.sa_flags   = 0;
         sigemptyset(&shutdownAction.sa_mask);
         sigaddset(&shutdownAction.sa_mask, SIGTERM);
@@ -94,7 +96,6 @@ libcaer::devices::davis DVSData::connect2camera(int ID, void (&globalShutdownSig
     
 
     // Tweak some biases, to increase bandwidth in this case.
-    uint16_t fine;
     struct caer_bias_coarsefine coarseFineBias;
 
     coarseFineBias.coarseValue        = 2;
@@ -105,7 +106,7 @@ libcaer::devices::davis DVSData::connect2camera(int ID, void (&globalShutdownSig
     coarseFineBias.currentLevelNormal = true;
 
 
-    davisHandle.configSet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRBP, caerBiasCoarseFineGenerate(coarseFineBias));	// caerBiasCoarseFineGenerate(coarseFineBias)
+    davisHandle.configSet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRBP, caerBiasCoarseFineGenerate(coarseFineBias));
 
     coarseFineBias.coarseValue        = 1;
     coarseFineBias.fineValue          = 33;
@@ -115,7 +116,7 @@ libcaer::devices::davis DVSData::connect2camera(int ID, void (&globalShutdownSig
     coarseFineBias.currentLevelNormal = true;
 
 
-    davisHandle.configSet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRSFBP, caerBiasCoarseFineGenerate(coarseFineBias));	//caerBiasCoarseFineGenerate
+    davisHandle.configSet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRSFBP, caerBiasCoarseFineGenerate(coarseFineBias));
 
     // Set parsing intervall 
     davisHandle.configSet(CAER_HOST_CONFIG_PACKETS, CAER_HOST_CONFIG_PACKETS_MAX_CONTAINER_INTERVAL, container_interval);
@@ -134,9 +135,16 @@ libcaer::devices::davis DVSData::connect2camera(int ID, void (&globalShutdownSig
 // Now let's get start getting some data from the device. We just loop in blocking mode,
 // no notification needed regarding new events. The shutdown notification, for example if
 // the device is disconnected, should be listened to.
-libcaer::devices::davis DVSData::startdatastream(libcaer::devices::davis davisHandle, void (&usbShutdownHandler)(void *ptr)){
+libcaer::devices::davis DVSData::startdatastream(libcaer::devices::davis davisHandle){
 
-    davisHandle.dataStart(nullptr, nullptr, nullptr, &usbShutdownHandler, nullptr);
+    // Let's get configs about buffer
+    davisHandle.configSet(CAER_HOST_CONFIG_DATAEXCHANGE, CAER_HOST_CONFIG_DATAEXCHANGE_BUFFER_SIZE, buffer_size);
+
+    uint32_t BFSize   = davisHandle.configGet(CAER_HOST_CONFIG_DATAEXCHANGE, CAER_HOST_CONFIG_DATAEXCHANGE_BUFFER_SIZE);
+
+    printf("Buffer size: %d", BFSize);
+
+    davisHandle.dataStart(nullptr, nullptr, nullptr, &DVSData::usbShutdownHandler, nullptr);
 
     // Let's turn on blocking data-get mode to avoid wasting resources.
     davisHandle.configSet(CAER_HOST_CONFIG_DATAEXCHANGE, CAER_HOST_CONFIG_DATAEXCHANGE_BLOCKING, true);
@@ -173,8 +181,8 @@ std::vector<torch::Tensor> DVSData::update(libcaer::devices::davis davisHandle){
 
             std::vector<AEDAT::PolarityEvent> polarity_events;
 
-            printf("Lowest Timestamp: %ld\n", (packetContainer->getLowestEventTimestamp()));
-            printf("Highest Timestamp: %ld\n", (packetContainer->getHighestEventTimestamp()));
+            printf("Lowest Timestamp: %f\n", (float (packetContainer->getLowestEventTimestamp())/1000000));
+            printf("Highest Timestamp: %f\n", (float (packetContainer->getHighestEventTimestamp())/1000000));
             printf("Time span of polarity packet: %ld\n", (packetContainer->getHighestEventTimestamp() - packetContainer->getLowestEventTimestamp()));
 
             for (const auto &evt : *polarity) {
@@ -221,11 +229,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("update", &DVSData::update)
       .def("stopdatastream", &DVSData::stopdatastream);
 
-  m.def("globalShutdownSignalHandler", globalShutdownSignalHandler,
-    py::arg("signal"));
-
-  m.def("usbShutdownHandler", usbShutdownHandler,
-    py::arg("ptr"));
 }
 
 

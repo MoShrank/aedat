@@ -17,13 +17,14 @@ class DVSData{
     public:
         // Parameters
         uint32_t container_interval;
+        uint32_t buffer_size;
 
-        DVSData(uint32_t interval);
+        DVSData(uint32_t interval, uint32_t bfsize);
 
-        //void globalShutdownSignalHandler(int signal);
-        //void usbShutdownHandler(void *ptr); 
-        libcaer::devices::davis connect2camera(int ID, void (&globalShutdownSignalHandler)(int signal));
-        libcaer::devices::davis startdatastream(libcaer::devices::davis davisHandle, void (&usbShutdownHandler)(void *ptr));
+        static void globalShutdownSignalHandler(int signal);
+        static void usbShutdownHandler(void *ptr); 
+        libcaer::devices::davis connect2camera(int ID);
+        libcaer::devices::davis startdatastream(libcaer::devices::davis davisHandle);
         std::vector<torch::Tensor> update(libcaer::devices::davis davisHandle);
         int stopdatastream(libcaer::devices::davis davisHandle);
 };
