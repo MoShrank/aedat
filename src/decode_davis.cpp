@@ -4,6 +4,7 @@
 #include <libcaer/devices/davis.h>
 #include "decode_davis.hpp"
 #include "convert.hpp"
+#include "generator_davis.hpp"
 
 #include <atomic>
 #include <csignal>
