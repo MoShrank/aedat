@@ -17,3 +17,9 @@ find_package (Python3 REQUIRED COMPONENTS Development)
 
 # Add subdirectories
 add_subdirectory("src")
+
+# Add tests if specified
+option(PACKAGE_TESTS "Build the tests" ON)
+if(PACKAGE_TESTS)
+    add_subdirectory("tests")
+endif()

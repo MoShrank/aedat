@@ -4,7 +4,6 @@
 #include <libcaer/devices/davis.h>
 #include "decode_davis.hpp"
 #include "convert.hpp"
-#include "generator_davis.hpp"
 
 #include <atomic>
 #include <csignal>
@@ -205,6 +204,6 @@ int decode_stream(void){
 }
 
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("decode_stream", &decode_stream);
-}
+// PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+//   m.def("decode_stream", &decode_stream);
+// }
