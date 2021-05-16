@@ -1,7 +1,7 @@
 /*
 ** listener.c -- a datagram sockets "server" demo
 */
-
+#include <iostream>
 #include <stdio.h>
 #include <stdlib.h>
 #include <fstream>
@@ -33,11 +33,12 @@ int main(int argc, char *argv[])
     struct addrinfo hints, *servinfo, *p;
     int rv;
     int numbytes;
+    int check;
     struct sockaddr_storage their_addr;
     socklen_t addr_len;
     char s[INET6_ADDRSTRLEN];
 
-    u_int16_t int_buf[6];
+    u_int16_t int_buf[600];
     bool timestamp_flag, polarity; 
     uint16_t x_coord, y_coord;
     uint64_t timestamp; 
@@ -94,10 +95,11 @@ int main(int argc, char *argv[])
         //printf("listener: got packet from %s\n", inet_ntop(their_addr.ss_family, get_in_addr((struct sockaddr *)&their_addr), s, sizeof s));
         printf("listener: packet is %d bytes long\n", numbytes);
 
+        check = numbytes/2-2;
         // Decoding according to protocol
-        for(int i = 0; i<=numbytes/2; i++){
+        for(int i = check; i<check+2; i++){
             int_buf[i] = ntohs(int_buf[i]);
-            if (i == 0){
+            if (i == check){
                 if(int_buf[i] & 0x8000){
                     timestamp_flag = 1;
                 }
@@ -109,7 +111,7 @@ int main(int argc, char *argv[])
                 x_coord = int_buf[i] & 0x7FFF;
             }
 
-            if (i == 1){
+            if (i == check+1){
                 if(int_buf[i] & 0x8000){
                     polarity = 1;
                 }
@@ -120,13 +122,12 @@ int main(int argc, char *argv[])
                 y_coord = int_buf[i] & 0x7FFF;
             }
 
-
         }
 
         //printf("timestamp flag: %d\n", timestamp_flag);
-        //printf("x: %d\n", x_coord);
-        //printf("y: %d\n", y_coord);
-        //printf("polarity: %d\n", polarity);
+        printf("x: %d\n", x_coord);
+        printf("y: %d\n", y_coord);
+        printf("polarity: %d\n", polarity);
         //printf("======================\n");
 
         if (argc >= 2){
