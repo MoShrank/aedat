@@ -1,0 +1,298 @@
+#define LIBCAER_FRAMECPP_OPENCV_INSTALLED 0
+
+#include <libcaercpp/devices/davis.hpp>
+#include <libcaer/devices/davis.h>
+#include "stream_dvs.hpp"
+#include "convert.hpp"
+
+#include <atomic>
+#include <csignal>
+
+// socket programming
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+
+
+// Constructor - initialize socket 
+DVSStream::DVSStream(uint32_t interval, uint32_t bfsize, const char* port, struct addrinfo *point, const char* file){
+    struct addrinfo hints, *servinfo;
+    int rv;
+
+    container_interval = interval; 
+    buffer_size = bfsize;
+    serverport = port;
+    p = point;
+    filename = file;
+
+    if (strcmp (filename,"None") != 0){
+        printf("Write output to file: %s\n", filename);
+        fileOutput.open(filename, std::fstream::app);
+    }
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family = AF_INET6; // set to AF_INET to use IPv4
+    hints.ai_socktype = SOCK_DGRAM;
+    hints.ai_flags = AI_PASSIVE; // use my IP
+
+    if ((rv = getaddrinfo(NULL, serverport, &hints, &servinfo)) != 0) {
+        fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
+        throw "Error raised";
+    }
+
+    // loop through all the results and make a socket
+    for(p = servinfo; p != NULL; p = p->ai_next) {
+        if ((sockfd = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
+            perror("talker: socket");
+            continue;
+        }
+
+        break;
+    }
+
+    if (p == NULL) {
+        fprintf(stderr, "talker: failed to create socket\n");
+        throw "Error raised";
+    }
+}
+
+void DVSStream::globalShutdownSignalHandler(int signal) {
+    static atomic_bool globalShutdown(false);
+    // Simply set the running flag to false on SIGTERM and SIGINT (CTRL+C) for global shutdown.
+    if (signal == SIGTERM || signal == SIGINT) {
+        globalShutdown.store(true);
+    }
+}
+
+void DVSStream::usbShutdownHandler(void *ptr) {
+    static atomic_bool globalShutdown(false);
+	(void) (ptr); // UNUSED.
+
+	globalShutdown.store(true);
+}
+
+// Open a DAVIS, given ID, and don't care about USB bus or SN restrictions.
+libcaer::devices::davis DVSStream::connect2camera(int ID){
+
+    #if defined(_WIN32)
+        if (signal(SIGTERM, &globalShutdownSignalHandler) == SIG_ERR) {
+            libcaer::log::log(libcaer::log::logLevel::CRITICAL, "ShutdownAction",
+                "Failed to set signal handler for SIGTERM. Error: %d.", errno);
+            return (EXIT_FAILURE);
+        }
+
+        if (signal(SIGINT, &globalShutdownSignalHandler) == SIG_ERR) {
+            libcaer::log::log(libcaer::log::logLevel::CRITICAL, "ShutdownAction",
+                "Failed to set signal handler for SIGINT. Error: %d.", errno);
+            return (EXIT_FAILURE);
+        }
+    #else
+        struct sigaction shutdownAction;
+        
+        shutdownAction.sa_handler = &DVSStream::globalShutdownSignalHandler;
+        shutdownAction.sa_flags   = 0;
+        sigemptyset(&shutdownAction.sa_mask);
+        sigaddset(&shutdownAction.sa_mask, SIGTERM);
+        sigaddset(&shutdownAction.sa_mask, SIGINT);
+
+        if (sigaction(SIGTERM, &shutdownAction, NULL) == -1) {
+            libcaer::log::log(libcaer::log::logLevel::CRITICAL, "ShutdownAction",
+                "Failed to set signal handler for SIGTERM. Error: %d.", errno);
+            return (EXIT_FAILURE);
+        }
+
+        if (sigaction(SIGINT, &shutdownAction, NULL) == -1) {
+            libcaer::log::log(libcaer::log::logLevel::CRITICAL, "ShutdownAction",
+                "Failed to set signal handler for SIGINT. Error: %d.", errno);
+            return (EXIT_FAILURE);
+        }
+    #endif
+
+    libcaer::devices::davis davisHandle = libcaer::devices::davis(1);
+
+    // Let's take a look at the information we have on the device.
+    struct caer_davis_info davis_info = davisHandle.infoGet();
+
+    printf("%s --- ID: %d, Master: %d, DVS X: %d, DVS Y: %d, Logic: %d.\n", davis_info.deviceString,
+        davis_info.deviceID, davis_info.deviceIsMaster, davis_info.dvsSizeX, davis_info.dvsSizeY,
+        davis_info.logicVersion);
+
+    // Send the default configuration before using the device.
+    // No configuration is sent automatically!
+    davisHandle.sendDefaultConfig();
+    
+
+    // Tweak some biases, to increase bandwidth in this case.
+    struct caer_bias_coarsefine coarseFineBias;
+
+    coarseFineBias.coarseValue        = 2;
+    coarseFineBias.fineValue          = 116;
+    coarseFineBias.enabled            = true;
+    coarseFineBias.sexN               = false;
+    coarseFineBias.typeNormal         = true;
+    coarseFineBias.currentLevelNormal = true;
+
+
+    davisHandle.configSet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRBP, caerBiasCoarseFineGenerate(coarseFineBias));
+
+    coarseFineBias.coarseValue        = 1;
+    coarseFineBias.fineValue          = 33;
+    coarseFineBias.enabled            = true;
+    coarseFineBias.sexN               = false;
+    coarseFineBias.typeNormal         = true;
+    coarseFineBias.currentLevelNormal = true;
+
+
+    davisHandle.configSet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRSFBP, caerBiasCoarseFineGenerate(coarseFineBias));
+
+    // Set parsing intervall 
+    davisHandle.configSet(CAER_HOST_CONFIG_PACKETS, CAER_HOST_CONFIG_PACKETS_MAX_CONTAINER_INTERVAL, container_interval);
+
+    // Let's verify they really changed!
+    uint32_t prBias   = davisHandle.configGet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRBP);
+    uint32_t prsfBias = davisHandle.configGet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRSFBP);
+
+    printf("New bias values --- PR-coarse: %d, PR-fine: %d, PRSF-coarse: %d, PRSF-fine: %d.\n",
+    caerBiasCoarseFineParse(prBias).coarseValue, caerBiasCoarseFineParse(prBias).fineValue,
+    caerBiasCoarseFineParse(prsfBias).coarseValue, caerBiasCoarseFineParse(prsfBias).fineValue);
+
+    return davisHandle;
+}
+
+// Now let's get start getting some data from the device. We just loop in blocking mode,
+// no notification needed regarding new events. The shutdown notification, for example if
+// the device is disconnected, should be listened to.
+libcaer::devices::davis DVSStream::startdatastream(libcaer::devices::davis davisHandle){
+
+    // Let's get configs about buffer
+    davisHandle.configSet(CAER_HOST_CONFIG_DATAEXCHANGE, CAER_HOST_CONFIG_DATAEXCHANGE_BUFFER_SIZE, buffer_size);
+
+    uint32_t BFSize   = davisHandle.configGet(CAER_HOST_CONFIG_DATAEXCHANGE, CAER_HOST_CONFIG_DATAEXCHANGE_BUFFER_SIZE);
+
+    printf("Buffer size: %d", BFSize);
+
+    davisHandle.dataStart(nullptr, nullptr, nullptr, &DVSStream::usbShutdownHandler, nullptr);
+
+    // Let's turn on blocking data-get mode to avoid wasting resources.
+    davisHandle.configSet(CAER_HOST_CONFIG_DATAEXCHANGE, CAER_HOST_CONFIG_DATAEXCHANGE_BLOCKING, true);
+
+return davisHandle; 
+}
+
+
+// Process an event and send it using UDP
+void DVSStream::sendpacket(libcaer::devices::davis davisHandle){
+    std::unique_ptr<libcaer::events::EventPacketContainer> packetContainer = nullptr;
+    int numbytes;
+    bool include_timestamp = false;
+    uint16_t length;
+
+    do {
+      packetContainer = davisHandle.dataGet();
+    } while (packetContainer == nullptr);
+
+
+    printf("\nGot event container with %d packets (allocated).\n", packetContainer->size());
+
+    for (auto &packet : *packetContainer) {
+        if (packet == nullptr) {
+            printf("Packet is empty (not present).\n");
+            continue; // Skip if nothing there.
+        }
+
+        printf("Packet of type %d -> %d events, %d capacity.\n", packet->getEventType(), packet->getEventNumber(), packet->getEventCapacity());
+
+
+        if (packet->getEventType() == POLARITY_EVENT) {
+            std::shared_ptr<const libcaer::events::PolarityEventPacket> polarity = std::static_pointer_cast<libcaer::events::PolarityEventPacket>(packet);
+            
+            // Print out timestamps and addresses.
+            //printf("Lowest Timestamp: %f\n", (float (packetContainer->getLowestEventTimestamp())/1000000));
+            //printf("Highest Timestamp: %f\n", (float (packetContainer->getHighestEventTimestamp())/1000000));
+            //printf("Time span of polarity packet: %ld\n", (packetContainer->getHighestEventTimestamp() - packetContainer->getLowestEventTimestamp()));
+
+            for (const auto &evt : *polarity) {
+                if (evt.isValid() == true){
+                    AEDAT::PolarityEventTransfer polarity_event;
+
+                    if (include_timestamp){
+                        length = 6; 
+                    }
+                    else{
+                        length = 2;
+                    }
+
+                    uint16_t message[length];
+
+                    polarity_event.timestamp = evt.getTimestamp64(*polarity);
+                    polarity_event.x = evt.getX();
+                    polarity_event.y = evt.getY();
+                    polarity_event.polarity   = evt.getPolarity();
+                    
+                    if (strcmp (filename,"None") != 0){
+                        fileOutput << "DVS " << polarity_event.timestamp << " " << polarity_event.x << " " << polarity_event.y << " " << polarity_event.polarity << std::endl;
+                    }
+
+                    message[0] = polarity_event.x;
+                    message[1] = polarity_event.y;
+
+                    // Encoding according to protocol
+                    if (include_timestamp){
+                        message[0] = htons(message[0] & 0x7FFF);
+
+
+                        uint64_t timestamp = evt.getTimestamp64(*polarity);
+                        uint16_t timearray[4];
+                        std::memcpy(timearray, &timestamp, sizeof(timestamp));
+                        for(int i=0; i<length; i++){
+                            message[2+i] = timearray[i];
+                        }
+                    }
+                    else{
+                        message[0] = htons(message[0] | 0x8000);
+                    }
+
+                    if (polarity_event.polarity){
+                        message[1] = htons(message[1] | 0x8000);
+                    }
+                    else{
+                        message[1] = htons(message[1] & 0x7FFF);
+                    }
+
+
+                    if ((numbytes = sendto(DVSStream::sockfd,  &message, sizeof(message), 0, p->ai_addr, p->ai_addrlen)) == -1) {
+                        perror("talker: sendto");
+                        exit(1);
+                    }
+
+                    //printf("talker: sent %d bytes\n", numbytes);
+                    
+                    //printf("Time: %d\n", polarity_event.timestamp);
+                    //printf("x: %d\n", polarity_event.x);
+                    //printf("y: %d\n", polarity_event.y);
+                    //printf("polarity: %d\n", polarity_event.polarity);
+                }
+            }
+        }
+    }
+}
+
+// Stops the datastream
+int DVSStream::stopdatastream(libcaer::devices::davis davisHandle){
+    davisHandle.dataStop();
+    // Close automatically done by destructor.
+    printf("Shutdown successful.\n");
+    return (EXIT_FAILURE);
+}
+
+// Close the socket
+void DVSStream::closesocket(){
+    close(sockfd);
+}
