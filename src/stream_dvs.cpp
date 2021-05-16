@@ -22,27 +22,32 @@
 
 
 // Constructor - initialize socket 
-DVSStream::DVSStream(uint32_t interval, uint32_t bfsize, const char* port, struct addrinfo *point, const char* file){
+DVSStream::DVSStream(uint32_t interval, uint32_t bfsize, const char* port, const char* IP, struct addrinfo *point, const char* file){
     struct addrinfo hints, *servinfo;
     int rv;
 
     container_interval = interval; 
     buffer_size = bfsize;
     serverport = port;
+    IPAdress = IP;
     p = point;
     filename = file;
 
+    // Open file for writing events if specified
     if (strcmp (filename,"None") != 0){
         printf("Write output to file: %s\n", filename);
         fileOutput.open(filename, std::fstream::app);
     }
 
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_INET6; // set to AF_INET to use IPv4
+    hints.ai_family = AF_INET; // set to AF_INET to use IPv4, to AF_INET6 to use IPv6
     hints.ai_socktype = SOCK_DGRAM;
-    hints.ai_flags = AI_PASSIVE; // use my IP
 
-    if ((rv = getaddrinfo(NULL, serverport, &hints, &servinfo)) != 0) {
+    if (IPAdress == NULL){
+        hints.ai_flags = AI_PASSIVE; // if IP adress not specified, use my IP
+    }
+
+    if ((rv = getaddrinfo(IPAdress, serverport, &hints, &servinfo)) != 0) {
         fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
         throw "Error raised";
     }
@@ -63,6 +68,7 @@ DVSStream::DVSStream(uint32_t interval, uint32_t bfsize, const char* port, struc
     }
 }
 
+// Global Shutdown Handler
 void DVSStream::globalShutdownSignalHandler(int signal) {
     static atomic_bool globalShutdown(false);
     // Simply set the running flag to false on SIGTERM and SIGINT (CTRL+C) for global shutdown.
@@ -71,6 +77,7 @@ void DVSStream::globalShutdownSignalHandler(int signal) {
     }
 }
 
+// USB Shutdown Handler
 void DVSStream::usbShutdownHandler(void *ptr) {
     static atomic_bool globalShutdown(false);
 	(void) (ptr); // UNUSED.
@@ -78,7 +85,8 @@ void DVSStream::usbShutdownHandler(void *ptr) {
 	globalShutdown.store(true);
 }
 
-// Open a DAVIS, given ID, and don't care about USB bus or SN restrictions.
+
+// Open a DAVIS given a USB ID, and don't care about USB bus or SN restrictions.
 libcaer::devices::davis DVSStream::connect2camera(int ID){
 
     #if defined(_WIN32)
@@ -166,18 +174,19 @@ libcaer::devices::davis DVSStream::connect2camera(int ID){
     return davisHandle;
 }
 
-// Now let's get start getting some data from the device. We just loop in blocking mode,
+
+// Start getting some data from the device. We just loop in blocking mode,
 // no notification needed regarding new events. The shutdown notification, for example if
 // the device is disconnected, should be listened to.
 libcaer::devices::davis DVSStream::startdatastream(libcaer::devices::davis davisHandle){
 
-    // Let's get configs about buffer
+    // Configs about buffer
     davisHandle.configSet(CAER_HOST_CONFIG_DATAEXCHANGE, CAER_HOST_CONFIG_DATAEXCHANGE_BUFFER_SIZE, buffer_size);
 
     uint32_t BFSize   = davisHandle.configGet(CAER_HOST_CONFIG_DATAEXCHANGE, CAER_HOST_CONFIG_DATAEXCHANGE_BUFFER_SIZE);
-
     printf("Buffer size: %d", BFSize);
 
+    // Start data stream
     davisHandle.dataStart(nullptr, nullptr, nullptr, &DVSStream::usbShutdownHandler, nullptr);
 
     // Let's turn on blocking data-get mode to avoid wasting resources.
@@ -187,12 +196,24 @@ return davisHandle;
 }
 
 
-// Process an event and send it using UDP
-void DVSStream::sendpacket(libcaer::devices::davis davisHandle){
+// Process a packet of events and send it using UDP over the socket
+void DVSStream::sendpacket(libcaer::devices::davis davisHandle, bool include_timestamp){
     std::unique_ptr<libcaer::events::EventPacketContainer> packetContainer = nullptr;
     int numbytes;
-    bool include_timestamp = false;
-    uint16_t length;
+    int current_event = 0; 
+
+    uint16_t UDP_max_bytesize = 512;
+    uint16_t max_events;
+
+    uint16_t message[UDP_max_bytesize/2];
+    bool sent; 
+
+    if (include_timestamp){
+            max_events = UDP_max_bytesize / 8; 
+        }
+        else{
+            max_events = UDP_max_bytesize / 4;
+    }
 
     do {
       packetContainer = davisHandle.dataGet();
@@ -212,77 +233,75 @@ void DVSStream::sendpacket(libcaer::devices::davis davisHandle){
 
         if (packet->getEventType() == POLARITY_EVENT) {
             std::shared_ptr<const libcaer::events::PolarityEventPacket> polarity = std::static_pointer_cast<libcaer::events::PolarityEventPacket>(packet);
-            
-            // Print out timestamps and addresses.
-            //printf("Lowest Timestamp: %f\n", (float (packetContainer->getLowestEventTimestamp())/1000000));
-            //printf("Highest Timestamp: %f\n", (float (packetContainer->getHighestEventTimestamp())/1000000));
-            //printf("Time span of polarity packet: %ld\n", (packetContainer->getHighestEventTimestamp() - packetContainer->getLowestEventTimestamp()));
 
             for (const auto &evt : *polarity) {
                 if (evt.isValid() == true){
                     AEDAT::PolarityEventTransfer polarity_event;
-
-                    if (include_timestamp){
-                        length = 6; 
-                    }
-                    else{
-                        length = 2;
-                    }
-
-                    uint16_t message[length];
+                    sent = false; 
 
                     polarity_event.timestamp = evt.getTimestamp64(*polarity);
                     polarity_event.x = evt.getX();
                     polarity_event.y = evt.getY();
                     polarity_event.polarity   = evt.getPolarity();
                     
+                    // If specified write to file
                     if (strcmp (filename,"None") != 0){
                         fileOutput << "DVS " << polarity_event.timestamp << " " << polarity_event.x << " " << polarity_event.y << " " << polarity_event.polarity << std::endl;
                     }
 
-                    message[0] = polarity_event.x;
-                    message[1] = polarity_event.y;
-
                     // Encoding according to protocol
                     if (include_timestamp){
-                        message[0] = htons(message[0] & 0x7FFF);
+                        message[2*current_event] = htons(polarity_event.x & 0x7FFF);
 
-
-                        uint64_t timestamp = evt.getTimestamp64(*polarity);
-                        uint16_t timearray[4];
+                        uint32_t timestamp = evt.getTimestamp();
+                        uint16_t timearray[2];
                         std::memcpy(timearray, &timestamp, sizeof(timestamp));
-                        for(int i=0; i<length; i++){
-                            message[2+i] = timearray[i];
+                        for(int i=0; i<2; i++){
+                            message[2*current_event+2+i] = htons(timearray[i]);
                         }
                     }
                     else{
-                        message[0] = htons(message[0] | 0x8000);
+                        message[2*current_event] = htons(polarity_event.x | 0x8000);
                     }
 
                     if (polarity_event.polarity){
-                        message[1] = htons(message[1] | 0x8000);
+                        message[2*current_event+1] = htons(polarity_event.y | 0x8000);
                     }
                     else{
-                        message[1] = htons(message[1] & 0x7FFF);
+                        message[2*current_event+1] = htons(polarity_event.y & 0x7FFF);
                     }
 
+                    if (include_timestamp){
+                        current_event += 2;
+                    }
+                    else{
+                        current_event += 1;
+                    }
+                }
 
+                if (current_event == max_events){
                     if ((numbytes = sendto(DVSStream::sockfd,  &message, sizeof(message), 0, p->ai_addr, p->ai_addrlen)) == -1) {
-                        perror("talker: sendto");
+                        perror("talker error: sendto");
                         exit(1);
                     }
-
-                    //printf("talker: sent %d bytes\n", numbytes);
                     
-                    //printf("Time: %d\n", polarity_event.timestamp);
-                    //printf("x: %d\n", polarity_event.x);
-                    //printf("y: %d\n", polarity_event.y);
-                    //printf("polarity: %d\n", polarity_event.polarity);
+                    sent = true; 
+                    current_event = 0;
                 }
             }
         }
     }
+
+    if (sent == false){
+        uint16_t small_array[current_event*2]; 
+        std::memcpy(small_array, &message, current_event*4);
+        if ((numbytes = sendto(DVSStream::sockfd,  &small_array, sizeof(small_array), 0, p->ai_addr, p->ai_addrlen)) == -1) {
+            perror("talker error: sendto");
+            exit(1);
+        }
+    }
 }
+
 
 // Stops the datastream
 int DVSStream::stopdatastream(libcaer::devices::davis davisHandle){
@@ -291,6 +310,7 @@ int DVSStream::stopdatastream(libcaer::devices::davis davisHandle){
     printf("Shutdown successful.\n");
     return (EXIT_FAILURE);
 }
+
 
 // Close the socket
 void DVSStream::closesocket(){
