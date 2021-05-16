@@ -23,3 +23,15 @@ option(PACKAGE_TESTS "Build the tests" ON)
 if(PACKAGE_TESTS)
     add_subdirectory("tests")
 endif()
+
+# stream_dvs data
+add_library(stream_dvs SHARED stream_dvs.hpp stream_dvs.cpp convert.cpp)
+target_compile_features(stream_dvs PRIVATE cxx_std_14)
+target_include_directories(stream_dvs PRIVATE ${TORCH_INCLUDE_DIRS} ${Python3_INCLUDE_DIRS} ${SDL2_INCLUDE_DIRS} ${LZ4_INCLUDE_DIR})
+target_link_directories(stream_dvs PRIVATE ${LIBCAER_LINK_DIRECTORIES} ${TORCH_LINK_DIRECTORIES} ${CMAKE_BINARY_DIR}/res)
+target_link_libraries(stream_dvs PRIVATE ${CAER_LIBRARY} ${TORCH_LIBRARIES} ${SDL2_LIBRARIES} ${Python3_LIBRARIES} ${LZ4_LIBRARY})
+
+
+add_executable(streamdata streamdata.cpp)
+target_include_directories(streamdata PRIVATE ${TORCH_INCLUDE_DIRS})
+target_link_libraries(streamdata PRIVATE stream_dvs ${TORCH_LIBRARIES} ${CAER_LIBRARY})
