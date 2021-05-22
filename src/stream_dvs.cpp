@@ -251,24 +251,24 @@ void DVSStream::sendpacket(libcaer::devices::davis davisHandle, bool include_tim
 
                     // Encoding according to protocol
                     if (include_timestamp){
-                        message[2*current_event] = htons(polarity_event.x & 0x7FFF);
+                        message[2*current_event + 1] = polarity_event.x & 0x7FFF;
 
                         uint32_t timestamp = evt.getTimestamp();
                         uint16_t timearray[2];
                         std::memcpy(timearray, &timestamp, sizeof(timestamp));
                         for(int i=0; i<2; i++){
-                            message[2*current_event+2+i] = htons(timearray[i]);
+                            message[2*current_event+2+i] = timearray[i];
                         }
                     }
                     else{
-                        message[2*current_event] = htons(polarity_event.x | 0x8000);
+                        message[2*current_event + 1] = polarity_event.x | 0x8000;
                     }
 
                     if (polarity_event.polarity){
-                        message[2*current_event+1] = htons(polarity_event.y | 0x8000);
+                        message[2*current_event] = polarity_event.y | 0x8000;
                     }
                     else{
-                        message[2*current_event+1] = htons(polarity_event.y & 0x7FFF);
+                        message[2*current_event] = polarity_event.y & 0x7FFF;
                     }
 
                     if (include_timestamp){
