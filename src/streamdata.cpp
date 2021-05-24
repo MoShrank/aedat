@@ -8,9 +8,8 @@ int main(int argc, char *argv[]) {
 	std::string command = "Nonset";
 	uint32_t interval;
 	uint32_t buffer_size;
-	const char* port = "4950";	// Port number
-	const char* IPAdress = NULL;	// IP Adress - if NULL, use own IP
-	
+	const char* port = "3333";	// Port number
+	const char* IPAdress = NULL;	// IP Adress
 
 	int nr_packets = 0;
 	int id = 1;
@@ -33,7 +32,7 @@ int main(int argc, char *argv[]) {
 	auto davisHandler = dvsstream.connect2camera(id);
 	davisHandler = dvsstream.startdatastream(davisHandler);
 
-	while (nr_packets < 3000) { //command!="q"
+	while (nr_packets < 20000) { //command!="q"
 		dvsstream.sendpacket(davisHandler, false);
 		nr_packets += 1;
 		//std::getline(std::cin, command);
@@ -42,5 +41,7 @@ int main(int argc, char *argv[]) {
 	exitcode = dvsstream.stopdatastream(davisHandler);
 
 	dvsstream.closesocket();
+
+	printf("Total number of events sent: %ld\n", dvsstream.events_sent);
 
 }

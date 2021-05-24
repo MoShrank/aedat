@@ -26,11 +26,15 @@ DVSStream::DVSStream(uint32_t interval, uint32_t bfsize, const char* port, const
     struct addrinfo hints, *servinfo;
     int rv;
 
+    // Packet configs
     container_interval = interval; 
     buffer_size = bfsize;
+    
+    // UDP configs 
     serverport = port;
     IPAdress = IP;
     p = point;
+
     filename = file;
 
     // Open file for writing events if specified
@@ -123,7 +127,7 @@ libcaer::devices::davis DVSStream::connect2camera(int ID){
         }
     #endif
 
-    libcaer::devices::davis davisHandle = libcaer::devices::davis(1);
+    libcaer::devices::davis davisHandle = libcaer::devices::davis(ID);
 
     // Let's take a look at the information we have on the device.
     struct caer_davis_info davis_info = davisHandle.infoGet();
@@ -161,7 +165,11 @@ libcaer::devices::davis DVSStream::connect2camera(int ID){
     davisHandle.configSet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRSFBP, caerBiasCoarseFineGenerate(coarseFineBias));
 
     // Set parsing intervall 
-    davisHandle.configSet(CAER_HOST_CONFIG_PACKETS, CAER_HOST_CONFIG_PACKETS_MAX_CONTAINER_INTERVAL, container_interval);
+    //davisHandle.configSet(CAER_HOST_CONFIG_PACKETS, CAER_HOST_CONFIG_PACKETS_MAX_CONTAINER_INTERVAL, container_interval);
+
+    // Set number of events per packet
+    davisHandle.configSet(CAER_HOST_CONFIG_PACKETS, CAER_HOST_CONFIG_PACKETS_MAX_CONTAINER_PACKET_SIZE, container_interval);
+
 
     // Let's verify they really changed!
     uint32_t prBias   = davisHandle.configGet(DAVIS_CONFIG_BIAS, DAVIS240_CONFIG_BIAS_PRBP);
@@ -200,20 +208,19 @@ return davisHandle;
 void DVSStream::sendpacket(libcaer::devices::davis davisHandle, bool include_timestamp){
     std::unique_ptr<libcaer::events::EventPacketContainer> packetContainer = nullptr;
     int numbytes;
+    int event_size; 
+    uint16_t max_events;
+    bool sent;    
     int current_event = 0; 
 
-    uint16_t UDP_max_bytesize = 512;
-    uint16_t max_events;
-
-    uint16_t message[UDP_max_bytesize/2];
-    bool sent; 
-
     if (include_timestamp){
-            max_events = UDP_max_bytesize / 8; 
+            event_size = 8; 
         }
         else{
-            max_events = UDP_max_bytesize / 4;
+            event_size = 4;
     }
+
+    max_events = UDP_max_bytesize / event_size; 
 
     do {
       packetContainer = davisHandle.dataGet();
@@ -251,24 +258,19 @@ void DVSStream::sendpacket(libcaer::devices::davis davisHandle, bool include_tim
 
                     // Encoding according to protocol
                     if (include_timestamp){
-                        message[2*current_event + 1] = polarity_event.x & 0x7FFF;
+                        message[current_event] = (polarity_event.x & 0x7FFF) << 16;
 
-                        uint32_t timestamp = evt.getTimestamp();
-                        uint16_t timearray[2];
-                        std::memcpy(timearray, &timestamp, sizeof(timestamp));
-                        for(int i=0; i<2; i++){
-                            message[2*current_event+2+i] = timearray[i];
-                        }
+                        message[current_event+1] = evt.getTimestamp();
                     }
                     else{
-                        message[2*current_event + 1] = polarity_event.x | 0x8000;
+                        message[current_event] = (polarity_event.x | 0x8000) << 16;
                     }
 
                     if (polarity_event.polarity){
-                        message[2*current_event] = polarity_event.y | 0x8000;
+                        message[current_event] |= polarity_event.y | 0x8000;
                     }
                     else{
-                        message[2*current_event] = polarity_event.y & 0x7FFF;
+                        message[current_event] |= polarity_event.y & 0x7FFF;
                     }
 
                     if (include_timestamp){
@@ -287,18 +289,22 @@ void DVSStream::sendpacket(libcaer::devices::davis davisHandle, bool include_tim
                     
                     sent = true; 
                     current_event = 0;
+                    events_sent += max_events;
                 }
+            }
+
+            if (strcmp (filename,"None") != 0){
+                fileOutput << "=================" << std::endl;
             }
         }
     }
 
     if (sent == false){
-        uint16_t small_array[current_event*2]; 
-        std::memcpy(small_array, &message, current_event*4);
-        if ((numbytes = sendto(DVSStream::sockfd,  &small_array, sizeof(small_array), 0, p->ai_addr, p->ai_addrlen)) == -1) {
+        if ((numbytes = sendto(DVSStream::sockfd,  &message, current_event*event_size, 0, p->ai_addr, p->ai_addrlen)) == -1) {
             perror("talker error: sendto");
             exit(1);
         }
+        events_sent += current_event;
     }
 }
 
