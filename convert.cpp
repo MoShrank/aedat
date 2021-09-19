@@ -210,7 +210,12 @@ std::vector<torch::Tensor> get_frames_from_events(std::vector<AEDAT::PolarityEve
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
-  py::class_<AEDAT::PolarityEvent>(m, "PolarityEvent");
+  py::class_<AEDAT::PolarityEvent>(m, "PolarityEvent")
+      .def("get_valid", &AEDAT::PolarityEvent::get_valid)
+      .def("get_x", &AEDAT::PolarityEvent::get_x)
+      .def("get_y", &AEDAT::PolarityEvent::get_y)
+      .def("get_polarity", &AEDAT::PolarityEvent::get_polarity)
+      .def("get_timestamp", &AEDAT::PolarityEvent::get_timestamp);
 
   py::class_<dvs_gesture::DataSet::DataPoint>(m, "DVSGestureDataPoint")
       .def_readonly("label", &dvs_gesture::DataSet::DataPoint::label)

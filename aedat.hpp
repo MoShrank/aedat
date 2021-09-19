@@ -5,8 +5,10 @@
 #include <stdlib.h>
 #include <vector>
 
-struct AEDAT {
-  enum class EventType : uint16_t {
+struct AEDAT
+{
+  enum class EventType : uint16_t
+  {
     SPECIAL_EVENT = 0,
     POLARITY_EVENT = 1,
     FRAME_EVENT = 2,
@@ -15,21 +17,31 @@ struct AEDAT {
     SPIKE_EVENT = 12,
   };
 
-  struct PolarityEvent {
+  struct PolarityEvent
+  {
     uint32_t valid : 1;
     uint32_t polarity : 1;
     uint32_t x : 15;
     uint32_t y : 15;
     uint32_t timestamp : 32;
+
+    uint32_t get_valid() { return valid; }
+    uint32_t get_x() { return x; }
+    uint32_t get_y() { return y; }
+    uint32_t get_polarity() { return polarity; }
+    uint32_t get_timestamp() { return timestamp; }
+
   } __attribute__((packed));
 
-  struct SpecialEvent {
+  struct SpecialEvent
+  {
     uint32_t valid : 1;
     uint32_t type : 7;
     uint32_t data : 24;
   } __attribute__((packed));
 
-  struct DynapSEEvent {
+  struct DynapSEEvent
+  {
     uint32_t valid : 1;
     uint32_t core_id : 5;
     uint32_t chip_id : 6;
@@ -37,7 +49,8 @@ struct AEDAT {
     uint32_t timestamp;
   } __attribute__((packed));
 
-  enum class SpecialEventType : uint8_t {
+  enum class SpecialEventType : uint8_t
+  {
     TIMESTAMP_WRAP = 0,
     TIMESTAMP_RESET = 1,
     EXTERNAL_INPUT_RISING_EDGE = 2,
@@ -58,7 +71,8 @@ struct AEDAT {
     APS_EXPOSURE_END = 17,
   };
 
-  struct IMU6Event {
+  struct IMU6Event
+  {
     uint32_t valid : 1;
     uint32_t padding : 31;
     uint32_t timestamp : 32;
@@ -71,7 +85,8 @@ struct AEDAT {
     float temp;
   } __attribute__((packed));
 
-  struct IMU9Event {
+  struct IMU9Event
+  {
     uint32_t valid : 1;
     uint32_t padding : 31;
     uint32_t timestamp : 32;
@@ -87,7 +102,8 @@ struct AEDAT {
     float comp_z;
   } __attribute__((packed));
 
-  struct FrameEventHeader {
+  struct FrameEventHeader
+  {
     uint32_t valid : 1;
     uint32_t channels : 3;
     uint32_t filter : 4;
@@ -103,12 +119,14 @@ struct AEDAT {
     uint32_t y_position;
   } __attribute__((packed));
 
-  struct FrameEvent {
+  struct FrameEvent
+  {
     FrameEventHeader header;
     std::vector<uint16_t> pixels;
   };
 
-  struct Header {
+  struct Header
+  {
     EventType eventType;
     uint16_t eventSource;
     uint32_t eventSize;
@@ -119,7 +137,8 @@ struct AEDAT {
     uint32_t eventValid;
   } __attribute__((packed));
 
-  void load(const std::string &filename) {
+  void load(const std::string &filename)
+  {
     std::fstream fs;
     char line[128];
     Header header;
@@ -127,49 +146,65 @@ struct AEDAT {
 
     fs.open(filename, std::fstream::in);
 
-    do {
+    do
+    {
       fs.getline(line, 128);
       str = std::string(line);
     } while (str.rfind("#!END-HEADER", 0) != 0);
 
-    while (fs.read((char *)(&header), 28)) {
-      if (header.eventTSOverflow != 0) {
+    while (fs.read((char *)(&header), 28))
+    {
+      if (header.eventTSOverflow != 0)
+      {
         std::cout << "Unhandled TSOverflow "
                   << static_cast<uint16_t>(header.eventTSOverflow) << std::endl;
       }
-      if (header.eventType == EventType::POLARITY_EVENT) {
+      if (header.eventType == EventType::POLARITY_EVENT)
+      {
         PolarityEvent polarity_event;
-        for (size_t i = 0; i < header.eventNumber; i++) {
+        for (size_t i = 0; i < header.eventNumber; i++)
+        {
           fs.read((char *)(&polarity_event), header.eventSize);
           polarity_events.push_back(polarity_event);
         }
         fs.ignore((header.eventCapacity - header.eventNumber) *
                   header.eventSize);
-      } else if (header.eventType == EventType::IMU6_EVENT) {
+      }
+      else if (header.eventType == EventType::IMU6_EVENT)
+      {
         IMU6Event imu6_event;
-        for (size_t i = 0; i < header.eventNumber; i++) {
+        for (size_t i = 0; i < header.eventNumber; i++)
+        {
           fs.read((char *)(&imu6_event), header.eventSize);
           imu6_events.push_back(imu6_event);
         }
         fs.ignore((header.eventCapacity - header.eventNumber) *
                   header.eventSize);
-      } else if (header.eventType == EventType::IMU9_EVENT) {
+      }
+      else if (header.eventType == EventType::IMU9_EVENT)
+      {
         IMU9Event imu9_event;
-        for (size_t i = 0; i < header.eventNumber; i++) {
+        for (size_t i = 0; i < header.eventNumber; i++)
+        {
           fs.read((char *)(&imu9_event), header.eventSize);
           imu9_events.push_back(imu9_event);
         }
         fs.ignore((header.eventCapacity - header.eventNumber) *
                   header.eventSize);
-      } else if (header.eventType == EventType::SPIKE_EVENT) {
+      }
+      else if (header.eventType == EventType::SPIKE_EVENT)
+      {
         DynapSEEvent dyn_event;
-        for (size_t i = 0; i < header.eventNumber; i++) {
+        for (size_t i = 0; i < header.eventNumber; i++)
+        {
           fs.read((char *)(&dyn_event), header.eventSize);
           dynapse_events.push_back(dyn_event);
         }
         fs.ignore((header.eventCapacity - header.eventNumber) *
                   header.eventSize);
-      } else {
+      }
+      else
+      {
         std::cout << "Unhandled Event type "
                   << static_cast<uint16_t>(header.eventType) << std::endl;
         fs.ignore(header.eventCapacity * header.eventSize);
